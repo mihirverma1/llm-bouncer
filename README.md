@@ -234,6 +234,56 @@ breaks it a year from now.
 
 ---
 
+## Writing your own rail
+
+Subclass `Rail`, set a `name`, implement `check`. Nothing else is required — no
+registry, no entry point, no library change.
+
+```python
+from llm_bouncer.rails.base import Rail
+from llm_bouncer.result import Severity
+
+class ShoutRail(Rail):
+    name = "shout"
+
+    def check(self, text):
+        if text.isupper():
+            return self._block("all caps", severity=Severity.LOW)
+        return self._allow()
+```
+
+`_allow`, `_block`, and `_transform` are convenience builders. They exist for one
+reason: every rail would otherwise write its own name into every result it
+constructs, in every branch, and a typo there corrupts the audit trail without
+failing any of that rail's tests — because rail tests assert verdicts, not names.
+The helpers fill `self.name` in for you. Extra keyword arguments become
+`metadata`.
+
+Three rules a rail must follow:
+
+- **Never raise on hostile input.** Adversarial text is the normal case, not an
+  error. Return `BLOCK`. An exception escaping a rail kills the pipeline, which
+  fails *open* if the caller catches broadly.
+- **Never mutate the input.** Return the rewrite via `TRANSFORM` and let the
+  pipeline adopt it. A rail that edits in place makes execution order impossible
+  to reason about.
+- **Be deterministic.** Same input, same verdict. The Week-3 red-team harness
+  replays payloads and diffs results; a rail that wobbles makes that report
+  worthless.
+
+### Base class or Protocol?
+
+`Rail` is an abstract base class rather than a `typing.Protocol`, because there
+is genuinely shared code worth inheriting (those helpers), and `@abstractmethod`
+turns "forgot to implement `check`" into a clear `TypeError` at construction
+instead of an `AttributeError` mid-run.
+
+You are not locked in, though. `Pipeline` duck-types — it calls `rail.check(text)`
+and never runs an `isinstance` check. Any object with a matching method works.
+The base class is a convenience, not a gate. Full reasoning in ADR-001.
+
+---
+
 ## Testing approach
 
 Tests come before implementation, and the failing run is not skipped. A test
@@ -257,7 +307,7 @@ wrong in a data shape: a wrong default, and a shared mutable default.
 
 - [x] Package skeleton, editable install
 - [x] Result types (`Verdict`, `Severity`, `RailResult`, `PipelineResult`)
-- [ ] `Rail` base contract
+- [x] `Rail` base contract
 - [ ] `LengthRail` — size cap, plus per-process rate limiting
 - [ ] `InjectionRail` — patterns loaded from YAML, never hardcoded in `.py`
 - [ ] `SecretsRail` — API key and token detection, redaction via `TRANSFORM`
